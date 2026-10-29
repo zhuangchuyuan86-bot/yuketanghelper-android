@@ -19,7 +19,7 @@ data class AiSettings(val keys: List<AiKey> = emptyList(), val active: Int = 0, 
 }
 data class Subscription(
     val enabled: Boolean = false,
-    val kinds: Set<EventKind> = setOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK),
+    val kinds: Set<EventKind> = setOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK, EventKind.QUICK_ANSWER),
 ) { fun accepts(kind: EventKind) = enabled && kind in kinds }
 
 data class CourseSettings(
@@ -35,6 +35,7 @@ data class CourseSettings(
     val danmuThreshold: Int = 3,
     val notification: Subscription = Subscription(true, setOf(EventKind.QUESTION, EventKind.CALL, EventKind.HOMEWORK)),
     val voice: Subscription = Subscription(),
+    val autoQuickAnswer: Boolean = false,
 ) {
     fun mode(type: Int) = when (type) { 1 -> single; 2 -> multiple; 3 -> vote; 5 -> short; else -> AnswerMode.OFF }
 }
@@ -76,6 +77,7 @@ object ConfigurationCodec {
         put("single", s.single.name); put("multiple", s.multiple.name)
         put("vote", s.vote.name); put("short", s.short.name); put("near", s.nearDeadline)
         put("danmu", s.autoDanmu); put("bonus", s.autoBonus); put("threshold", s.danmuThreshold)
+        put("quickAnswer", s.autoQuickAnswer)
         put("notification", subscription(s.notification)); put("voice", subscription(s.voice))
     }
     private fun course(r: JsonObject): CourseSettings {
@@ -85,7 +87,8 @@ object ConfigurationCodec {
         }
         return CourseSettings(r.bool("enabled", true), mode("single"), mode("multiple"), mode("vote"), mode("short", true),
             r.bool("near", false), r.bool("danmu", false), r.bool("bonus", false), r.int("threshold", 3).coerceIn(1, 100),
-            subscription(r.obj("notification"), CourseSettings().notification), subscription(r.obj("voice"), Subscription()))
+            subscription(r.obj("notification"), CourseSettings().notification), subscription(r.obj("voice"), Subscription()),
+            r.bool("quickAnswer", false))
     }
     private fun ai(value: AiSettings) = buildJsonObject {
         put("active", value.active); put("fallback", value.fallback)

@@ -21,7 +21,7 @@ internal class CourseIndexView(
     private var busy = false
     private val accountLabel = context.label("", 12f, Palette.muted)
     private val message = context.label("", 12f, Palette.warning)
-    private val hint = context.label("勾选需要监测的课程后，点击下方应用。", 12f, Palette.muted)
+    private val hint = context.label("选择后点击“应用课程选择”。", 12f, Palette.muted)
     private val switch = context.compactAction("切换账号", onSwitch)
     private val refresh = context.compactAction("刷新", onRefresh)
     private val apply = context.action("应用课程选择") {

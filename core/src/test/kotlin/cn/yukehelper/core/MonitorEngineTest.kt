@@ -162,6 +162,8 @@ class MonitorEngineTest {
             override suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long) { submitted++ }
             override suspend fun danmu(account: Account, access: LessonAccess, content: String) = Unit
             override suspend fun bonus(account: Account, access: LessonAccess, id: String) = Unit
+            override suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unused")
+            override suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unused")
         }
         val job = backgroundScope.launch {
             MonitorEngine(gateway, automationFactory = { scope, account, access, emit ->
@@ -450,6 +452,8 @@ class MonitorEngineTest {
             override suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long) = Unit
             override suspend fun danmu(account: Account, access: LessonAccess, content: String) = Unit
             override suspend fun bonus(account: Account, access: LessonAccess, id: String) = Unit
+            override suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unused")
+            override suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unused")
         }
         val job = backgroundScope.launch {
             MonitorEngine(gateway, elapsed = { testScheduler.currentTime }, automationFactory = { scope, user, access, emit ->

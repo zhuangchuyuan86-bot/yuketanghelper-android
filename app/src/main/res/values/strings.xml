@@ -5,4 +5,5 @@
     <string name="course_live_detail">● 上课中 · %1$s</string>
     <string name="course_id">课程编号 %1$s</string>
     <string name="course_account">%1$s · %2$s</string>
+    <string name="login_without_background">%1$s\n系统未允许登录后台保护，请保持助手在前台或检查后台限制。</string>
 </resources>

@@ -28,5 +28,7 @@ DeepSeek 适配通过 OkHttp 调用官方 REST API，未引入额外 SDK 或本�
 
 AI 服务需使用各服务商有效的 API Key；模型可用性和用量计费由服务商决定。
 
+0.2.14 抢答协议依据官方公开学生端 JavaScript 核实，来源、消息字段及接口见 [自动抢答说明](docs/QUICK_ANSWER.md)。仅参考接口行为，未分发这些网页脚本、图片或音视频资源。
+
 
 Gradle Wrapper 的声明文件见 [licenses/gradle-LICENSE.txt](licenses/gradle-LICENSE.txt) 和 [licenses/gradle-NOTICE.txt](licenses/gradle-NOTICE.txt)。项目自有源码的授权状态见 [LICENSE_STATUS.md](LICENSE_STATUS.md)。

@@ -45,6 +45,7 @@ class LessonAccess(val lesson: ActiveLesson, val lessonToken: String, val bearer
 enum class EventKind(val label: String) {
     SYSTEM("状态"), SIGN_IN("签到"), QUESTION("题目"), CALL("点名"),
     DANMU("弹幕"), BONUS("红包"), LESSON_END("下课"), ERROR("连接"), ANSWER("答题"), ACTION("操作"), HOMEWORK("作业"),
+    QUICK_ANSWER("抢答"),
 }
 
 data class ClassroomEvent(
@@ -66,6 +67,7 @@ sealed interface LessonFrame {
 sealed interface LoginState {
     data object Connecting : LoginState
     class QrCode(val bytes: ByteArray) : LoginState
+    data object Verifying : LoginState
     data class Success(val account: Account) : LoginState
 }
 

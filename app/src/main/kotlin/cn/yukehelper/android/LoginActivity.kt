@@ -28,6 +28,10 @@ class LoginActivity : Activity() {
     private var cookieJob: Job? = null
     private var bitmap: Bitmap? = null
     private var completing = false
+    private var loginMode = "qr"
+    private var qrAttempt = -1L
+    private var pendingSave: Bitmap? = null
+    private var pendingAttempt = -1L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,10 +47,11 @@ class LoginActivity : Activity() {
         content = column()
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
         showContent(root)
-        if (intent.getStringExtra("mode") == "web") showWeb() else showQr()
+        if ((savedInstanceState?.getString("loginMode") ?: intent.getStringExtra("mode")) == "web") showWeb() else showQr()
     }
 
-    private fun showQr() {
+    private fun showQr(force: Boolean = false) {
+        loginMode = "qr"
         loginJob?.cancel(); cookieJob?.cancel()
         webView?.let { it.stopLoading(); it.destroy() }; webView = null
         content.removeAllViews()
@@ -61,34 +66,51 @@ class LoginActivity : Activity() {
         }.apply { setBackgroundColor(android.graphics.Color.WHITE); contentDescription = "微信登录二维码"; setPadding(dp(12), dp(12), dp(12), dp(12)) }
         page.addView(image, LinearLayout.LayoutParams(-1, -2)); page.gap(22)
         page.block(label("使用微信扫一扫登录", 21f, bold = true).apply { gravity = Gravity.CENTER }, 12)
-        page.block(label("同一部手机操作时，可先保存二维码，再到微信扫一扫中选择相册。二维码会定时刷新。", 14f, Palette.muted), 20)
-        page.block(action("保存二维码到相册", false) { saveQr() }, 10)
-        page.block(action("重新获取二维码", false) { showQr() }, 10)
-        page.block(action("改用网页登录", false) { showWeb() })
+        page.block(label("保存二维码，在微信扫一扫中从相册识别；确认后返回助手。过期时请重新获取。", 14f, Palette.muted), 20)
+        val save = action("保存二维码到相册", false) { saveQr() }
+        val refresh = action("重新获取二维码", false) { showQr(force = true) }
+        val web = action("改用网页登录", false) { showWeb() }
+        page.block(save, 10); page.block(refresh, 10); page.block(web)
         scroll.addView(page); content.addView(scroll)
+        qrAttempt = graph.qrLogin.start(domain, force)
+        val observingAttempt = qrAttempt
+        var protected = true
+        if (graph.qrLogin.state.value.active) try {
+            startForegroundService(Intent(this, LoginService::class.java))
+        } catch (_: RuntimeException) { protected = false }
         loginJob = scope.launch {
-            status.text = "正在获取二维码…"
-            try {
-                graph.api.qrLogin(domain).collect { state ->
-                    when (state) {
-                        LoginState.Connecting -> status.text = "正在连接雨课堂…"
-                        is LoginState.QrCode -> {
-                            bitmap = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(state.bytes, 0, state.bytes.size) }
-                            if (bitmap == null) throw NetworkFailure("二维码图片无法识别")
-                            image.setImageBitmap(bitmap)
-                            status.text = "等待微信确认登录"
-                        }
-                        is LoginState.Success -> complete(state.account)
+            var displayed: ByteArray? = null
+            graph.qrLogin.state.collect { state ->
+                if (state.attempt != observingAttempt || state.domain != domain) return@collect
+                status.text = if (!protected && state.phase == QrLoginPhase.WAITING)
+                    getString(R.string.login_without_background, state.message) else state.message
+                val busy = state.phase in listOf(QrLoginPhase.VERIFYING, QrLoginPhase.SAVING)
+                refresh.isEnabled = !busy; web.isEnabled = !busy
+                save.isEnabled = state.phase == QrLoginPhase.WAITING && state.image != null
+                if (displayed !== state.image) {
+                    displayed = state.image
+                    bitmap = state.image?.let { bytes ->
+                        withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                    }
+                    image.setImageBitmap(bitmap)
+                    if (state.image != null && bitmap == null) {
+                        graph.qrLogin.cancel(observingAttempt, "二维码图片无法识别，请重新获取")
                     }
                 }
-            } catch (error: CancellationException) { throw error }
-            catch (_: Exception) { status.text = "登录连接暂不可用，请重新获取或改用网页登录" }
+                if (state.phase == QrLoginPhase.SUCCESS) {
+                    completing = true
+                    finish()
+                }
+            }
         }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun showWeb() {
+        loginMode = "web"
         loginJob?.cancel(); cookieJob?.cancel()
+        graph.qrLogin.cancel(qrAttempt)
+        bitmap = null
         content.removeAllViews()
         status.text = "请在雨课堂页面完成登录，完成后会自动返回"
         val browser = try { WebView(this) } catch (_: RuntimeException) {
@@ -165,7 +187,11 @@ class LoginActivity : Activity() {
 
     private fun saveQr() {
         val image = bitmap ?: run { Toast.makeText(this, "请等待二维码加载", Toast.LENGTH_SHORT).show(); return }
+        if (graph.qrLogin.state.value.let { it.attempt != qrAttempt || it.phase != QrLoginPhase.WAITING }) {
+            Toast.makeText(this, "本次二维码已结束，请重新获取", Toast.LENGTH_SHORT).show(); return
+        }
         if (Build.VERSION.SDK_INT < 29) {
+            pendingSave = image; pendingAttempt = qrAttempt
             // Android 8/9 use the system document picker: no broad storage permission needed.
             try {
                 @Suppress("DEPRECATION")
@@ -200,7 +226,11 @@ class LoginActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != 41 || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        val image = bitmap ?: run { Toast.makeText(this, "二维码已刷新，请重新保存", Toast.LENGTH_LONG).show(); return }
+        val image = pendingSave
+        pendingSave = null
+        if (image == null || pendingAttempt != qrAttempt || graph.qrLogin.state.value.let {
+                it.attempt != pendingAttempt || it.phase != QrLoginPhase.WAITING
+            }) { Toast.makeText(this, "本次二维码已结束，请重新保存", Toast.LENGTH_LONG).show(); return }
         scope.launch {
             val saved = withContext(Dispatchers.IO) { runCatching {
                 contentResolver.openOutputStream(uri)?.use { check(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
@@ -209,7 +239,12 @@ class LoginActivity : Activity() {
             Toast.makeText(this@LoginActivity, if (saved) "二维码已保存到所选位置，可在微信中选择此图片" else "保存失败，请重新选择位置", Toast.LENGTH_LONG).show()
         }
     }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("loginMode", loginMode)
+        super.onSaveInstanceState(outState)
+    }
     override fun onDestroy() {
+        if (isFinishing && loginMode == "qr") graph.qrLogin.cancel(qrAttempt)
         scope.cancel()
         webView?.let { it.stopLoading(); it.destroy() }
         super.onDestroy()

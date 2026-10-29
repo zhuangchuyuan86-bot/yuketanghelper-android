@@ -44,6 +44,8 @@ class AutomationTest {
         }
         override suspend fun danmu(account: Account, access: LessonAccess, content: String) { danmus++ }
         override suspend fun bonus(account: Account, access: LessonAccess, id: String) { bonuses++ }
+        override suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unexpected quick-answer read")
+        override suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive) = error("unexpected quick-answer post")
     }
     private inner class Fixture(scope: TestScope, q: Question = question()) {
         val gateway = Gateway(q)

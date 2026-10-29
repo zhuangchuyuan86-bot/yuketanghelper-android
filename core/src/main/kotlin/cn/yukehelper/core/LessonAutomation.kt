@@ -35,6 +35,7 @@ class LessonAutomation(
     private val emit: (ClassroomEvent) -> Unit,
     private val now: () -> Long = System::currentTimeMillis,
     private val random: Random = Random.Default,
+    quickAnswerLedger: QuickAnswerLedger = QuickAnswerLedger(),
 ) {
     @Volatile private var access = initialAccess
     @Volatile private var offset = 0L
@@ -49,6 +50,9 @@ class LessonAutomation(
     private val unlocked = linkedSetOf<String>()
     private val hints = mutableMapOf<String, Long>()
     private val danmu = DanmuWindow()
+    private val quickAnswer = QuickAnswerAutomation(scope, account, { access }, gateway, settings, quickAnswerLedger) {
+        event(EventKind.QUICK_ANSWER, it)
+    }
     init {
         scope.launch {
             for (frame in frames) {
@@ -61,6 +65,11 @@ class LessonAutomation(
     }
     fun updateAccess(value: LessonAccess) { access = value }
     fun accept(root: JsonObject) {
+        // Time-sensitive participation must not wait for presentation/image loading.
+        when (root.text("op")) {
+            "jumpinstart", "jumpinend" -> { quickAnswer.accept(root); return }
+            "hello" -> quickAnswer.accept(root)
+        }
         if (frames.trySend(root).isFailure) throw NetworkFailure("课堂操作队列已满，正在重连", ConnectionIssue.QUEUE)
     }
     private fun event(kind: EventKind, text: String) = emit(ClassroomEvent(kind, text, access.lesson.name, access.lesson.id, now()))

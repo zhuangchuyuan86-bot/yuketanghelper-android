@@ -19,6 +19,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 
 class MainActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -47,7 +48,6 @@ class MainActivity : Activity() {
         header = row().apply { setPadding(dp(22), dp(18), dp(22), dp(14)) }
         val titles = column().apply {
             addView(label("雨课助手", 25f, bold = true))
-            addView(label("课堂动态，一眼掌握", 12f, Palette.muted))
         }
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
         badge = label("准备就绪", 11f, Palette.accent).apply {
@@ -129,8 +129,7 @@ class MainActivity : Activity() {
 
     private fun welcome() {
         body.gap(22)
-        body.block(label("把课堂消息\n带在身边。", 34f, bold = true), 12)
-        body.block(label("课程、题目与点名提醒，集中查看。\n登录后，按需开启课堂期间的监测。", 15f, Palette.muted), 28)
+        body.block(label("登录雨课堂", 30f, bold = true), 20)
         body.block(card().apply {
             addView(label("选择你的雨课堂", 17f, bold = true)); gap()
             val chooser = Spinner(this@MainActivity).apply {
@@ -144,7 +143,6 @@ class MainActivity : Activity() {
             addView(chooser, touchParams()); gap()
             block(action("微信扫码登录") { login("qr") }, 10)
             block(action("使用网页登录", false) { login("web") }, 4)
-            addView(label("二维码可保存到相册后，在微信中识别。", 12f, Palette.muted))
         })
         body.block(action("先体验演示", false) {
             scope.launch {
@@ -152,7 +150,6 @@ class MainActivity : Activity() {
                 refreshCourses()
             }
         })
-        body.block(label("演示模式使用模拟课程和消息。", 12f, Palette.muted))
         body.block(action("AI 服务与密钥（全局）", false) { configure("ai") })
     }
 
@@ -160,13 +157,13 @@ class MainActivity : Activity() {
         val account = state.account ?: return
         body.gap(8)
         body.block(label("你好，${state.account!!.name}", 26f, bold = true), 6)
-        body.block(label(if (account.demo) "这里展示演示课程与模拟课堂操作。" else "${Domain.requireHost(account.domain).label} · 今天也别错过课堂消息", 13f, Palette.muted), 22)
+        body.block(label(if (account.demo) "演示数据" else Domain.requireHost(account.domain).label, 13f, Palette.muted), 16)
         body.block(card().apply {
             val title = row()
             title.addView(label("课堂监测", 19f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
             title.addView(label(if (state.monitoring) "运行中" else "未开启", 12f, if (state.monitoring) Palette.accent else Palette.muted))
             addView(title); gap()
-            addView(label(if (state.monitoring) "当前账号已连接 ${state.connected.size} 堂课。所有已启用账号同时监测，操作统一按通用课程设置执行。" else "开启后监测已启用账号的已选课程；考勤请以雨课堂为准。自动答题、弹幕与红包请在通用课程设置中开启。", 14f, Palette.muted))
+            addView(label(if (state.monitoring) "已连接 ${state.connected.size} 堂课" else "监测已选课程，考勤以雨课堂为准。", 14f, Palette.muted))
             gap(18)
             block(action(if (state.monitoring) "停止监测" else "开始监测", primary = !state.monitoring) {
                 if (state.monitoring) stopMonitoring() else startMonitoring()
@@ -202,17 +199,16 @@ class MainActivity : Activity() {
     private fun homework(state: AppState) {
         val account = state.account ?: return
         val status = state.homeworkStatus
-        body.block(label("监测期间定期检查已勾选课程的作业，每轮间隔 5 分钟；停止监测后可手动同步。首次同步提醒尚未截止的作业，后续提醒新作业、要求及截止时间变更。", 13f, Palette.muted), 12)
+        body.block(label("监测中每 5 分钟同步，也可手动刷新。", 13f, Palette.muted), 12)
         body.block(action(if (status.loading) "正在同步作业…" else "立即同步作业", false) {
             scope.launch { withContext(Dispatchers.IO) { graph.homework.sync(account) } }
         }.apply { isEnabled = !status.loading && (account.demo || account.sessionId.isNotBlank()) }, 10)
         body.block(label(status.message + if (status.lastSuccess > 0) "\n最近完整同步：${SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(status.lastSuccess))}" else "", 12f, Palette.muted), 12)
-        body.block(label("系统通知可在“通用课程设置 → 本机通知 → 作业”控制。图片、附件及完整题目请到官方雨课堂查看，截止时间以官方端为准。", 12f, Palette.muted), 16)
         val now = System.currentTimeMillis()
         val items = state.selectedHomework.sortedWith(compareBy<Homework> { it.expired(now) }
             .thenBy { if (it.expired(now)) -(it.deadline ?: 0L) else it.deadline ?: Long.MAX_VALUE }.thenBy { it.title })
         if (items.isEmpty()) {
-            body.block(emptyCard("暂无已同步作业", "请勾选需要的课程，再点“立即同步作业”。同步失败或未同步时，不能据此判断没有作业。"))
+            body.block(emptyCard("暂无已同步作业", "勾选课程后点击“立即同步作业”。"))
             return
         }
         items.take(homeworkLimit).forEach { item -> body.block(card().apply {
@@ -234,7 +230,7 @@ class MainActivity : Activity() {
         val content = column().apply {
             setPadding(dp(20), dp(12), dp(20), dp(20))
             addView(label("${item.course}\n截止：${item.deadlineLabel()}\n\n作业要求\n${item.requirementsLabel()}", 15f).apply { setTextIsSelectable(true) })
-            gap(); addView(label("内容为最近同步的缓存。图片、附件及完整题目请到官方雨课堂查看。", 12f, Palette.muted))
+            gap(); addView(label("图片、附件和最新要求请到雨课堂查看。", 12f, Palette.muted))
         }
         AlertDialog.Builder(this).setTitle(item.title).setView(ScrollView(this).apply { addView(content) })
             .setNegativeButton("关闭", null).setPositiveButton("去雨课堂") { _, _ -> openHomework(item, account) }.show()
@@ -253,26 +249,26 @@ class MainActivity : Activity() {
         body.block(label("设置", 27f, bold = true), 20)
         body.block(card().apply {
             addView(label("通用课程设置", 19f, bold = true)); gap(6)
-            addView(label("所有账号的课程共用一套答题、弹幕、红包和提醒规则。", 13f, Palette.muted)); gap()
+            addView(label("所有账号的已选课程共用。", 13f, Palette.muted)); gap()
             block(action("打开通用课程设置") { configure("common", account.key) }, 0)
         })
         body.block(card().apply {
             addView(label("AI 服务与密钥（全局）", 19f, bold = true)); gap(6)
-            addView(label("配置一次 API Key，所有雨课堂账号共用。切换或添加账号无需重新填写。", 13f, Palette.muted)); gap()
+            addView(label("配置一次，所有账号共用。", 13f, Palette.muted)); gap()
             block(action("管理全局 AI 设置", false) { configure("ai") }, 0)
         })
         body.block(card().apply {
             addView(label(state.account!!.name, 19f, bold = true)); gap(6)
             addView(label(if (account.demo) "演示账号" else Domain.requireHost(account.domain).label, 13f, Palette.muted))
             gap()
-            block(action("账号管理 · 添加与并行监测", false) { configure("accounts", account.key) }, 8)
+            block(action("账号管理", false) { configure("accounts", account.key) }, 8)
             if (!account.demo && account.sessionId.isBlank()) block(action("重新登录此账号") { domain = account.domain; login("qr") })
         })
         body.block(card().apply {
             addView(label("提醒与后台运行", 18f, bold = true)); gap()
             val enabled = getSystemService(NotificationManager::class.java).areNotificationsEnabled()
             block(action(if (enabled) "通知设置" else "开启课堂提醒", false) { notificationSettings() }, 10)
-            block(action("后台运行与机型适配", false) { startActivity(Intent(this@MainActivity, BackgroundActivity::class.java)) }, 10)
+            block(action("后台运行设置", false) { startActivity(Intent(this@MainActivity, BackgroundActivity::class.java)) }, 10)
             block(action("系统文字转语音设置", false) { openSettings("com.android.settings.TTS_SETTINGS") }, 10)
             block(action("试听中文语音", false) {
                 voiceTester?.close()
@@ -281,7 +277,6 @@ class MainActivity : Activity() {
                 tester.speak("雨课助手，课堂语音提醒已准备就绪")
                 scope.launch { delay(8_000); tester.close() }
             }, 10)
-            addView(label("可在“后台运行与机型适配”中检查通知和电池设置。系统结束进程后，需要重新开启监测。", 12f, Palette.muted))
         })
         body.block(action(if (account.demo) "退出演示" else "移除此账号", false) {
             AlertDialog.Builder(this).setTitle("移除${account.name}？").setMessage("此账号的本机登录、课程选择和消息将被移除。全局 AI 密钥及通用课程设置会保留。")
@@ -291,7 +286,7 @@ class MainActivity : Activity() {
                     page = 0
                 }.show()
         })
-        body.block(label("雨课助手 0.2.12\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
+        body.block(label("雨课助手 ${BuildConfig.VERSION_NAME}", 12f, Palette.muted))
     }
 
     private fun eventCard(event: ClassroomEvent) = card().apply {
@@ -347,7 +342,16 @@ class MainActivity : Activity() {
         } else launchMonitoring()
     }
     private fun launchMonitoring() {
-        try { startForegroundService(Intent(this, MonitorService::class.java).setAction(MonitorService.START)) }
+        try {
+            startForegroundService(Intent(this, MonitorService::class.java).setAction(MonitorService.START))
+            scope.launch {
+                // Start the foreground service first. Granting this request is optional.
+                val started = withTimeoutOrNull(5_000) { graph.store.state.first { it.monitoring } } ?: return@launch
+                if (!graph.store.state.value.monitoring) return@launch
+                if (started.configuration.profiles.any { it.monitored && !it.account.demo && it.account.sessionId.isNotBlank() })
+                    BackgroundAccess.requestOnce(this@MainActivity)
+            }
+        }
         catch (_: Exception) { graph.store.update { it.copy(message = "系统暂未允许后台运行，请稍后重试") } }
     }
     private fun stopMonitoring() {

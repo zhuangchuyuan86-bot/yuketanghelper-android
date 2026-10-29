@@ -18,7 +18,7 @@ class ConfigurationActivity : Activity() {
     private lateinit var body: LinearLayout
     private lateinit var mode: String
     private var nextInputId = 1000
-    private val kinds = listOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK)
+    private val kinds = listOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK, EventKind.QUICK_ANSWER)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mode = intent.getStringExtra("mode").orEmpty()
@@ -79,22 +79,22 @@ class ConfigurationActivity : Activity() {
     private fun commonEditor() {
         val config = store.state.value.configuration
         val s = config.courseSettings
-        body.block(label("所有课程统一设置", 25f, bold = true), 6)
-        body.block(label("保存后应用于所有账号的全部已选课程，以及以后新增并勾选的课程。课程页只负责选择监测范围。运行中的课堂会重新连接以应用规则。", 13f, Palette.muted))
+        body.block(label("课堂自动操作", 25f, bold = true), 6)
+        body.block(label("适用于所有账号的已选课程。", 13f, Palette.muted))
         if (config.settingsMigration.isNotBlank()) body.block(label(config.settingsMigration, 13f, Palette.warning))
-        body.block(label("AI 模式会把本题课件图片交给全局配置的 AI 服务。AI 超时、密钥不可用或答案无效时，选择题随机、主观题填空白。", 13f, Palette.warning))
+        body.block(label("AI 会读取题目图片；失败时选择题随机、主观题空白。", 13f, Palette.warning))
         val choices = listOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.RANDOM)
         val shorts = listOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.BLANK)
         val single = spinner("单选题", choices.map { it.label }, choices.indexOf(s.single))
         val multiple = spinner("多选题", choices.map { it.label }, choices.indexOf(s.multiple))
         val vote = spinner("投票题", choices.map { it.label }, choices.indexOf(s.vote))
         val short = spinner("主观题", shorts.map { it.label }, shorts.indexOf(s.short))
-        body.block(label("其他题型暂不自动作答。在“AI 服务与密钥（全局）”配置一次，所有账号共用。", 12f, Palette.muted))
         val near = check("临近截止提交（提前约 10–15 秒）", s.nearDeadline)
-        body.block(label("老师提前收题时可能无法提交；未提供截止时间时会尽快处理。提交前会检查是否已有答案。", 12f, Palette.muted))
         val danmu = check("跟随重复弹幕（60 秒内达到阈值）", s.autoDanmu)
         val threshold = field("相同弹幕阈值（1–100）", s.danmuThreshold.toString(), numeric = true)
         val bonus = check("自动领取课堂红包", s.autoBonus)
+        val quickAnswer = check("自动抢答", s.autoQuickAnswer)
+        body.block(label("抢到后请留意老师提问。", 12f, Palette.muted))
         body.gap()
         val notification = subscription("本机通知", s.notification)
         val voice = subscription("中文语音提醒", s.voice, includeHomework = false)
@@ -104,7 +104,7 @@ class ConfigurationActivity : Activity() {
             val value = CourseSettings(single = choices[single.selectedItemPosition], multiple = choices[multiple.selectedItemPosition],
                 vote = choices[vote.selectedItemPosition], short = shorts[short.selectedItemPosition], nearDeadline = near.isChecked,
                 autoDanmu = danmu.isChecked, autoBonus = bonus.isChecked, danmuThreshold = count,
-                notification = notification(), voice = voice())
+                notification = notification(), voice = voice(), autoQuickAnswer = quickAnswer.isChecked)
             save({ store.saveCourseSettings(value) })
         })
     }
@@ -113,12 +113,10 @@ class ConfigurationActivity : Activity() {
         nextInputId = 1000
         val config = store.state.value.configuration
         val ai = config.ai
-        body.block(label("所有账号共用 AI 服务", 23f, bold = true))
-        body.block(label("API Key、模型、优先顺序和失败回退均为全局设置。切换或添加雨课堂账号无需重复配置，移除账号也会保留。密钥仅加密保存在此手机。", 13f, Palette.muted))
+        body.block(label("AI 密钥", 23f, bold = true))
+        body.block(label("所有账号共用，密钥保存在本机。", 13f, Palette.muted))
         if (config.aiMigration.isNotBlank()) body.block(label(config.aiMigration, 13f, Palette.warning))
-        body.block(label("DeepSeek 默认使用支持图片的 deepseek-flash，直接读取本题课件；关闭深度思考以缩短等待。请使用 DeepSeek 开放平台的 API Key，并确保 API 余额可用。", 13f, Palette.muted))
-        body.block(label("演示课堂仅生成模拟答案，不调用真实 AI；此处保存的设置也会供真实账号使用。", 13f, Palette.muted))
-        if (ai.keys.isEmpty()) body.block(label("还没有密钥。通用设置使用 AI 模式但未配置全局密钥时，会使用随机/空白回退。", 14f, Palette.warning))
+        if (ai.keys.isEmpty()) body.block(label("添加密钥后，在通用课程设置中启用 AI 答题。", 14f, Palette.muted))
         else {
             val active = spinner("优先使用", ai.keys.map { "${it.name} · ${it.provider.label}" }, ai.active)
             val fallback = check("失败时尝试其他密钥", ai.fallback)
@@ -130,7 +128,7 @@ class ConfigurationActivity : Activity() {
         }
         ai.keys.forEachIndexed { index, key -> body.block(card().apply {
             addView(label(key.name, 18f, bold = true)); gap(6)
-            addView(label("${key.provider.label}\n${key.model}\n密钥已加密保存", 13f, Palette.muted)); gap()
+            addView(label("${key.provider.label}\n${key.model}", 13f, Palette.muted)); gap()
             block(action("编辑", false) { editKey(index) }, 8)
             block(action("删除密钥", false) {
                 AlertDialog.Builder(this@ConfigurationActivity).setTitle("删除${key.name}？")
@@ -157,9 +155,9 @@ class ConfigurationActivity : Activity() {
         form.block(providerHelp)
         fun updateHelp(position: Int) {
             providerHelp.text = when (providers[position]) {
-                AiProvider.DEEPSEEK -> "推荐 deepseek-flash（支持课件图片）。deepseek-v4-pro、deepseek-chat、deepseek-reasoner 等纯文本模型不能用于此处的图片答题。新增后请在上页选择为优先密钥并保存。"
+                AiProvider.DEEPSEEK -> "推荐 deepseek-flash，模型需支持图片输入。"
                 AiProvider.QWEN -> "使用 ModelScope API Key，模型需支持图片输入。"
-                AiProvider.GEMINI -> "使用 Google AI API Key，模型需支持图片输入，手机网络需能访问 Google 服务。"
+                AiProvider.GEMINI -> "模型需支持图片，手机网络需能访问 Google 服务。"
             }
         }
         updateHelp(provider.selectedItemPosition)
@@ -201,7 +199,7 @@ class ConfigurationActivity : Activity() {
         body.removeAllViews()
         nextInputId = 1000
         body.block(label("账号与监测", 25f, bold = true))
-        body.block(label("总览的开始/停止控制全部已启用账号。切换查看账号不会中断其他账号；演示操作仅使用模拟数据。", 13f, Palette.muted))
+        body.block(label("已启用的账号同时监测。", 13f, Palette.muted))
         store.state.value.configuration.profiles.forEach { p -> body.block(card().apply {
             addView(label(p.account.name, 19f, bold = true)); gap(5)
             addView(label(if (p.account.demo) "演示账号" else Domain.requireHost(p.account.domain).label, 13f, Palette.muted))

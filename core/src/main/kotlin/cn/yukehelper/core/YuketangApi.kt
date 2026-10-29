@@ -162,9 +162,18 @@ class YuketangApi(
         return QuestionProtocol.parse(json(request), id)
     }
 
-    private suspend fun action(account: Account, access: LessonAccess, path: String, body: JsonObject) {
-        val request = lessonRequest(account, access, path).post(body.toString().toRequestBody(JSON_TYPE)).build()
-        client.newCall(request).await().use { response ->
+    private val quickAnswerClient by lazy { client.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build() }
+    private suspend fun actionResponse(account: Account, access: LessonAccess, path: String, body: JsonObject, transport: OkHttpClient = client, oneShot: Boolean = false): JsonObject {
+        val jsonBody = body.toString().toRequestBody(JSON_TYPE)
+        // RetryOnConnectionFailure alone does not prevent a 503 Retry-After follow-up.
+        val requestBody = if (!oneShot) jsonBody else object : RequestBody() {
+            override fun contentType() = jsonBody.contentType()
+            override fun contentLength() = jsonBody.contentLength()
+            override fun writeTo(sink: okio.BufferedSink) = jsonBody.writeTo(sink)
+            override fun isOneShot() = true
+        }
+        val request = lessonRequest(account, access, path).post(requestBody).build()
+        return transport.newCall(request).await().use { response ->
             if (response.code == 401 || response.code == 403) throw SessionExpired()
             val root = if (response.isSuccessful) readJson(response) else withContext(Dispatchers.IO) {
                 try { protocolJson.parseToJsonElement(response.peekBody(16_384).string()) as? JsonObject }
@@ -179,7 +188,11 @@ class YuketangApi(
             }
             // HTTP errors and missing business confirmation must never count as success.
             if (!response.isSuccessful || code != 0) throw failure
+            root ?: throw failure
         }
+    }
+    private suspend fun action(account: Account, access: LessonAccess, path: String, body: JsonObject) {
+        actionResponse(account, access, path, body)
     }
     override suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long) =
         action(account, access, "/api/v3/lesson/problem/answer", QuestionProtocol.answer(question, answer, now))
@@ -194,68 +207,113 @@ class YuketangApi(
             put("lessonId", access.lesson.requestId); put("redEnvelopeId", identifier(id))
         })
 
+    override suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive): QuickAnswerRound {
+        require(QuickAnswerProtocol.identifier(id) != null)
+        val path = "/api/v3/lesson/rapid-answer/get-info"
+        val target = url(account.domain, path).newBuilder().addQueryParameter("id", id.content).build()
+        val data = Protocol.data(json(lessonRequest(account, access, path).url(target).build()))
+        return QuickAnswerProtocol.round(data)?.takeIf { it.id.content == id.content }
+            ?: throw NetworkFailure("抢答信息格式异常", ConnectionIssue.RESPONSE)
+    }
+
+    override suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive): QuickAnswerResult {
+        require(QuickAnswerProtocol.identifier(id) != null)
+        return QuickAnswerProtocol.result(actionResponse(account, access, "/api/v3/lesson/rapid-answer/participate",
+            buildJsonObject { put("id", id) }, quickAnswerClient, oneShot = true))
+    }
+
     private suspend fun exchange(domain: String, userId: JsonElement, auth: String): Account {
         val body = buildJsonObject { put("UserID", userId); put("Auth", auth) }
         val req = request(domain, "/pc/web_login")
             .post(body.toString().toRequestBody(JSON_TYPE)).build()
-        val session = response(req).use { result ->
-            Cookie.parseAll(req.url, result.headers).firstOrNull { it.name == "sessionid" }?.value
-                ?: throw NetworkFailure("登录未返回会话，请重新获取二维码")
+        val session = try {
+            response(req).use { result ->
+                Cookie.parseAll(req.url, result.headers).firstOrNull { it.name == "sessionid" }?.value
+                    ?.takeIf { it.isNotBlank() }
+                    ?: throw LoginFailure(LoginStage.EXCHANGE, advice = "服务器未返回登录会话，请重新获取二维码")
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (error: LoginFailure) { throw error }
+        catch (error: NetworkFailure) { throw LoginFailure(LoginStage.EXCHANGE, status = error.status) }
+        catch (_: Exception) { throw LoginFailure(LoginStage.EXCHANGE) }
+        // The login Auth may be single-use: retry only the read-only user lookup with this session.
+        repeat(3) { attempt ->
+            try { return account(domain, session) }
+            catch (error: CancellationException) { throw error }
+            catch (_: SessionExpired) { throw LoginFailure(LoginStage.USER, advice = "会话未生效或已失效，请重新扫码或改用网页登录") }
+            catch (error: ApiRejected) { throw LoginFailure(LoginStage.USER, code = error.code) }
+            catch (error: NetworkFailure) {
+                if (attempt == 2 || (error.status != null && error.status !in 500..599 && error.status != 429))
+                    throw LoginFailure(LoginStage.USER, status = error.status)
+                delay(1_000L * (attempt + 1))
+            }
         }
-        return account(domain, session)
+        throw LoginFailure(LoginStage.USER)
     }
 
     fun qrLogin(domain: String): Flow<LoginState> = callbackFlow {
         trySend(LoginState.Connecting)
         val exchanging = AtomicBoolean(false)
+        var imageJob: Job? = null
         val listener = object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(QR_REQUEST) }
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (!webSocket.send(QR_REQUEST)) close(LoginFailure(LoginStage.CONNECTION))
+            }
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val root = try { protocolJson.parseToJsonElement(text).jsonObject }
-                catch (_: Exception) { close(NetworkFailure("登录消息格式异常")); return }
+                catch (_: Exception) { close(LoginFailure(LoginStage.MESSAGE)); return }
                 when (root.text("op")) {
-                    "requestlogin" -> launch {
-                        try {
-                            val imageUrl = root.text("ticket").toHttpUrl()
-                            require(imageUrl.isHttps) { "二维码地址必须使用 HTTPS" }
-                            // QR image fetches never carry the user's cookies or lesson credentials.
-                            val image = withContext(Dispatchers.IO) { client.newBuilder().followRedirects(true).build()
-                                .newCall(Request.Builder().url(imageUrl).build()).await().use { imageResponse ->
-                                    if (!imageResponse.isSuccessful || (imageResponse.body?.contentLength() ?: 0) > 2_000_000) {
-                                        throw NetworkFailure("二维码暂时无法加载")
-                                    }
-                                    val bytes = imageResponse.body?.bytes() ?: throw NetworkFailure("二维码为空")
-                                    if (bytes.size > 2_000_000) throw NetworkFailure("二维码图片过大")
-                                    bytes
-                                } }
-                            send(LoginState.QrCode(image))
-                        } catch (error: CancellationException) { throw error }
-                        catch (_: Exception) { close(NetworkFailure("二维码加载失败，请重试")) }
+                    "requestlogin" -> if (!exchanging.get()) {
+                        imageJob?.cancel()
+                        imageJob = launch {
+                            try {
+                                val imageUrl = root.text("ticket").toHttpUrl()
+                                require(imageUrl.isHttps)
+                                // QR fetches carry no account or classroom credentials.
+                                val image = withContext(Dispatchers.IO) { client.newBuilder().followRedirects(true).build()
+                                    .newCall(Request.Builder().url(imageUrl).build()).await().use { imageResponse ->
+                                        if (!imageResponse.isSuccessful || (imageResponse.body?.contentLength() ?: 0) > 2_000_000)
+                                            throw LoginFailure(LoginStage.IMAGE)
+                                        val bytes = imageResponse.body?.bytes() ?: throw LoginFailure(LoginStage.IMAGE)
+                                        if (bytes.size > 2_000_000) throw LoginFailure(LoginStage.IMAGE)
+                                        bytes
+                                    } }
+                                if (!exchanging.get()) send(LoginState.QrCode(image))
+                            } catch (error: CancellationException) { throw error }
+                            catch (_: Exception) { if (!exchanging.get()) close(LoginFailure(LoginStage.IMAGE)) }
+                        }
                     }
                     "loginsuccess" -> if (exchanging.compareAndSet(false, true)) launch {
+                        imageJob?.cancel()
                         try {
-                            val id = root["UserID"] ?: throw NetworkFailure("登录消息缺少用户信息")
+                            send(LoginState.Verifying)
+                            val id = root["UserID"] as? JsonPrimitive ?: throw LoginFailure(LoginStage.MESSAGE)
+                            if (id.contentOrNull.isNullOrBlank() || root.text("Auth").isBlank()) throw LoginFailure(LoginStage.MESSAGE)
                             val account = exchange(domain, id, root.text("Auth"))
                             send(LoginState.Success(account))
                             webSocket.close(1000, "complete")
                             close()
                         } catch (error: CancellationException) { throw error }
-                        catch (_: Exception) { close(NetworkFailure("登录验证失败，请重新登录")) }
+                        catch (error: LoginFailure) { close(error) }
+                        catch (_: Exception) { close(LoginFailure(LoginStage.USER)) }
                     }
                 }
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                val status = response?.code
                 response?.close()
-                if (!exchanging.get()) close(NetworkFailure("登录连接已断开，请重试"))
+                if (!exchanging.get()) close(LoginFailure(LoginStage.CONNECTION, status = status,
+                    advice = "连接已中断，请重新获取二维码；同机扫码时请允许后台运行"))
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (!exchanging.get()) close(NetworkFailure("二维码连接已结束，请重新获取"))
+                if (!exchanging.get()) close(LoginFailure(LoginStage.CONNECTION, advice = "二维码连接已结束，请重新获取"))
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
         }
         val socket = client.newWebSocket(request(domain, "/wsapp/").build(), listener)
-        val refresh = launch { while (isActive) { delay(55_000); socket.send(QR_REQUEST) } }
-        awaitClose { refresh.cancel(); socket.cancel() }
+        // Keep the displayed/saved ticket on the same socket. A timer must not silently replace it.
+        // QrLoginController bounds the attempt; manual refresh explicitly cancels the previous socket.
+        awaitClose { imageJob?.cancel(); socket.cancel() }
     }
 
     override fun frames(account: Account, access: LessonAccess): Flow<LessonFrame> = callbackFlow {

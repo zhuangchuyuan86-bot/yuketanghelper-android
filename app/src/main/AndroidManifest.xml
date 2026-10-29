@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>
     <application android:name=".HelperApplication" android:label="雨课助手"
         android:icon="@drawable/ic_app" android:roundIcon="@drawable/ic_app"
@@ -20,6 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".LoginService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".MonitorService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

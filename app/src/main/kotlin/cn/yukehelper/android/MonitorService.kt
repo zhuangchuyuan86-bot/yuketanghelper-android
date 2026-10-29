@@ -88,7 +88,7 @@ class MonitorService : Service() {
                         LessonAutomation(sessionScope, user, access, actions,
                             if (account.demo) AiAnswerer { q, _ -> if (q.type == 5) Answer.Text("演示答案") else Answer.Choices(q.options.take(1)) } else graph.ai,
                             { graph.store.state.value.configuration.effectiveCourseSettings(key, access.lesson.classroomId) },
-                            { graph.store.state.value.configuration.ai }, emit)
+                            { graph.store.state.value.configuration.ai }, emit, quickAnswerLedger = graph.quickAnswerLedger)
                     }).run(account) { update ->
                     if (graph.store.profile(key)?.account !== account) return@run
                     when (update) {

@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -14,6 +15,14 @@ class HelperApplication : Application() {
         private set
     val api = YuketangApi()
     val ai = AiClient()
+    val quickAnswerLedger = QuickAnswerLedger()
+    private val loginScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
+    val qrLogin by lazy { QrLoginController(loginScope, api::qrLogin, { account ->
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            store.signIn(account)
+        }
+    }) }
     val homework by lazy { HomeworkSyncManager(this, store, api) }
     override fun onCreate() { super.onCreate(); store = AppStore(this) }
 }
@@ -27,6 +36,7 @@ class DemoGateway : ClassroomGateway {
         val samples = listOf(
             EventKind.QUESTION to "老师发布了一道新题目",
             EventKind.CALL to "老师正在点名，请留意课堂",
+            EventKind.QUICK_ANSWER to "老师发起了演示抢答",
             EventKind.DANMU to "这部分讲解很清楚",
         )
         var index = 0
@@ -45,6 +55,13 @@ class DemoGateway : ClassroomGateway {
                 repeat(3) { emit(LessonFrame.Signal(buildJsonObject { put("op", "newdanmu"); put("danmu", text) })) }
                 emit(LessonFrame.Event(ClassroomEvent(EventKind.BONUS, "课堂出现了演示红包", access.lesson.name, access.lesson.id)))
                 emit(LessonFrame.Signal(buildJsonObject { put("op", "gainbonus"); put("redEnvelopeId", System.nanoTime().toString()) }))
+            }
+            if (kind == EventKind.QUICK_ANSWER) {
+                val now = System.currentTimeMillis()
+                emit(LessonFrame.Signal(buildJsonObject {
+                    put("op", "jumpinstart")
+                    put("jumpin", buildJsonObject { put("id", now.toString()); put("now", now); put("start", now + 3_000) })
+                }))
             }
         }
     }
@@ -69,4 +86,9 @@ object DemoActions : AutomationGateway {
     }
     override suspend fun danmu(account: Account, access: LessonAccess, content: String) { delay(100) }
     override suspend fun bonus(account: Account, access: LessonAccess, id: String) { delay(100) }
+    override suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive) = QuickAnswerRound(id, 0)
+    override suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive): QuickAnswerResult {
+        delay(100)
+        return QuickAnswerResult.SUCCESS
+    }
 }

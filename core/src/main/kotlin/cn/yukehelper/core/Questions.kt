@@ -20,6 +20,8 @@ interface AutomationGateway {
     suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long)
     suspend fun danmu(account: Account, access: LessonAccess, content: String)
     suspend fun bonus(account: Account, access: LessonAccess, id: String)
+    suspend fun quickAnswerInfo(account: Account, access: LessonAccess, id: JsonPrimitive): QuickAnswerRound
+    suspend fun quickAnswer(account: Account, access: LessonAccess, id: JsonPrimitive): QuickAnswerResult
 }
 
 internal fun identifier(value: String): JsonPrimitive = value.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(value)

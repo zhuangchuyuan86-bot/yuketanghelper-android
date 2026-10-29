@@ -74,10 +74,11 @@ object Protocol {
             "newdanmu" -> root.text("danmu").take(200).takeIf { it.isNotBlank() }
                 ?.let { listOf(event(EventKind.DANMU, it)) } ?: emptyList()
             "gainbonus" -> listOf(event(EventKind.BONUS, "课堂出现了红包"))
+            "jumpinstart" -> listOf(event(EventKind.QUICK_ANSWER, "老师发起了抢答"))
             "lessonfinished" -> listOf(event(EventKind.LESSON_END, "本堂课已结束"), LessonFrame.Finished)
             else -> emptyList()
         }
-        val automation = root.text("op") in setOf("hello", "unlockproblem", "newdanmu", "gainbonus", "presentationupdated", "presentationcreated", "showpresentation") || root["unlockedproblem"] is JsonArray
+        val automation = root.text("op") in setOf("hello", "unlockproblem", "newdanmu", "gainbonus", "jumpinstart", "jumpinend", "presentationupdated", "presentationcreated", "showpresentation") || root["unlockedproblem"] is JsonArray
         return events + if (automation) listOf(LessonFrame.Signal(root)) else emptyList()
     }
 }
